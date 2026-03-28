@@ -124,9 +124,8 @@ id, driver_id, ride_id, amount, date
 
 ## 7. Proposed Tech Stack
 
-**Frontend:** HTML, CSS, JavaScript  
-
-**Backend:** XAMPP, Python, Java (Spring Boot)  
+**Frontend:** ReactJS
+**Backend:** PHP, Python, Java (Spring Boot)  
 
 **Database:** PostgreSQL  
 
