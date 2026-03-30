@@ -1,0 +1,86 @@
+services:
+
+  # ── Database ───────────────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d auth_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./php/init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  # ── Auth service (Spring Boot) ─────────────────────────────────────────────
+  backend:
+    image: eclipse-temurin:17-jdk-alpine
+    container_name: pasadanow_backend
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/auth_db
+      - SPRING_DATASOURCE_USERNAME=user
+      - SPRING_DATASOURCE_PASSWORD=password
+      - JWT_SECRET=Zm9ydHktdHdvLWlzLXRoZS1hbnN3ZXItdG8tbGlmZS10aGUtdW5pdmVyc2UtYW5kLWV2ZXJ5dGhpbmc=
+      - SPRING_DEVTOOLS_RESTART_ENABLED=true
+    volumes:
+      - ./backend:/app
+      - ~/.m2:/root/.m2
+    working_dir: /app
+    command: ./mvnw spring-boot:run
+
+  # ── Products API (PHP + Composer) ──────────────────────────────────────────
+  php:
+    build:
+      context: ./php        # Dockerfile lives inside ./php/
+      dockerfile: Dockerfile
+    container_name: php_api
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8081:80"
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_NAME=auth_db
+      - JWT_SECRET=Zm9ydHktdHdvLWlzLXRoZS1hbnN3ZXItdG8tbGlmZS10aGUtdW5pdmVyc2UtYW5kLWV2ZXJ5dGhpbmc=
+    volumes:
+      - ./php:/var/www/html   # dev hot-reload; vendor/ must exist locally too
+      - php_vendor:/var/www/html/vendor
+  # ── React frontend ─────────────────────────────────────────────────────────
+  frontend:
+    image: node:20-alpine
+    container_name: pasadanow_frontend
+    depends_on:
+      - backend
+      - php
+    ports:
+      - "3000:5173"
+    environment:
+      # Browser calls go through the host, so localhost is correct here
+      - VITE_API_BASE_URL=http://localhost:8080
+      - VITE_PHP_API_URL=http://localhost:8081
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+
+volumes:
+  postgres_data:
+  php_vendor:
