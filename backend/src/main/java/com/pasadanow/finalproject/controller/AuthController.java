@@ -50,8 +50,8 @@ public class AuthController {
         Cookie cookie = new Cookie("jwt", token);
         cookie.setHttpOnly(true);
         cookie.setPath("/");
-        cookie.setDomain(jwtDomain); // share across all localhost ports
-        cookie.setMaxAge(jwtExpirationMs / 1000); // convert ms → seconds
+        cookie.setDomain(jwtDomain);
+        cookie.setMaxAge(jwtExpirationMs / 1000);
         // cookie.setSecure(true); // uncomment in production (HTTPS)
         return cookie;
     }
@@ -61,7 +61,7 @@ public class AuthController {
         cookie.setHttpOnly(true);
         cookie.setPath("/");
         cookie.setDomain(jwtDomain);
-        cookie.setMaxAge(0); // immediately expire
+        cookie.setMaxAge(0);
         return cookie;
     }
 
@@ -69,15 +69,30 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest loginRequest,
-                                   HttpServletResponse response) {
+            HttpServletResponse response) {
         try {
             Authentication authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(
                             loginRequest.getUsername(), loginRequest.getPassword()));
 
-            String jwt = jwtUtils.generateToken(authentication.getName());
+            String username = authentication.getName();
+            String jwt = jwtUtils.generateToken(username);
             response.addCookie(buildJwtCookie(jwt));
-            return ResponseEntity.ok(Map.of("username", authentication.getName()));
+
+            // Fetch user from DB to get role and profile fields
+            User user = userRepository.findByUsername(username)
+                    .orElseThrow(() -> new RuntimeException("User not found"));
+
+            // Map ROLE_DRIVER → "driver", ROLE_USER → "commuter"
+            String role = "ROLE_DRIVER".equals(user.getRole()) ? "driver" : "commuter";
+
+            return ResponseEntity.ok(Map.of(
+                    "username", username,
+                    "role", role,
+                    "fullName", user.getFullName() != null ? user.getFullName() : "",
+                    "plateNo", user.getPlateNo() != null ? user.getPlateNo() : "",
+                    "licenseNo", user.getLicenseNo() != null ? user.getLicenseNo() : "",
+                    "todaNo", user.getTodaNo() != null ? user.getTodaNo() : ""));
 
         } catch (BadCredentialsException e) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
@@ -88,37 +103,43 @@ public class AuthController {
         }
     }
 
-@PostMapping("/register")
-public ResponseEntity<?> register(@RequestBody SignupRequest req,
-                                  HttpServletResponse response) {
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@RequestBody SignupRequest req,
+            HttpServletResponse response) {
 
-    if (userRepository.findByUsername(req.getUsername()).isPresent()) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(Map.of("message", "Username is already taken"));
+        if (userRepository.findByUsername(req.getUsername()).isPresent()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "Username is already taken"));
+        }
+
+        // Map the role string from the frontend to the Spring Security role format
+        String role = "driver".equalsIgnoreCase(req.getRole())
+                ? "ROLE_DRIVER"
+                : "ROLE_USER"; // default → commuter
+
+        User user = new User(
+                req.getUsername(),
+                encoder.encode(req.getPassword()),
+                role,
+                req.getFullName(),
+                req.getPhone(),
+                req.getEmail(),
+                req.getLicenseNo(),
+                req.getPlateNo(),
+                req.getTodaNo());
+        userRepository.save(user);
+
+        // Return role and profile so frontend can optionally use it
+        String mappedRole = "ROLE_DRIVER".equals(role) ? "driver" : "commuter";
+
+        return ResponseEntity.ok(Map.of(
+                "username", req.getUsername(),
+                "role", mappedRole,
+                "fullName", req.getFullName() != null ? req.getFullName() : "",
+                "plateNo", req.getPlateNo() != null ? req.getPlateNo() : "",
+                "licenseNo", req.getLicenseNo() != null ? req.getLicenseNo() : "",
+                "todaNo", req.getTodaNo() != null ? req.getTodaNo() : ""));
     }
-
-    // Map the role string from the frontend to the Spring Security role format
-    String role = "driver".equalsIgnoreCase(req.getRole())
-            ? "ROLE_DRIVER"
-            : "ROLE_USER";   // default → commuter
-
-    User user = new User(
-            req.getUsername(),
-            encoder.encode(req.getPassword()),
-            role,
-            req.getFullName(),
-            req.getPhone(),
-            req.getEmail(),
-            req.getLicenseNo(),
-            req.getPlateNo(),
-            req.getTodaNo()
-    );
-    userRepository.save(user);
-
-    String jwt = jwtUtils.generateToken(req.getUsername());
-    response.addCookie(buildJwtCookie(jwt));
-    return ResponseEntity.ok(Map.of("username", req.getUsername()));
-}
 
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpServletResponse response) {

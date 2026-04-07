@@ -43,7 +43,7 @@ services:
   # ── Products API (PHP + Composer) ──────────────────────────────────────────
   php:
     build:
-      context: ./php        # Dockerfile lives inside ./php/
+      context: ./php
       dockerfile: Dockerfile
     container_name: php_api
     depends_on:
@@ -59,8 +59,34 @@ services:
       - DB_NAME=auth_db
       - JWT_SECRET=Zm9ydHktdHdvLWlzLXRoZS1hbnN3ZXItdG8tbGlmZS10aGUtdW5pdmVyc2UtYW5kLWV2ZXJ5dGhpbmc=
     volumes:
-      - ./php:/var/www/html   # dev hot-reload; vendor/ must exist locally too
+      - ./php:/var/www/html
       - php_vendor:/var/www/html/vendor
+
+  # ── GPS / Fare service (Django) ────────────────────────────────────────────
+  django:
+    build:
+      context: ./django
+      dockerfile: Dockerfile
+    container_name: pasadanow_django
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8082:8000"
+    environment:
+      - DEBUG=1
+      - DJANGO_SECRET_KEY=super-secret-change-me
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=user
+      - DB_PASSWORD=password
+      - DB_NAME=auth_db
+      - JWT_SECRET=Zm9ydHktdHdvLWlzLXRoZS1hbnN3ZXItdG8tbGlmZS10aGUtdW5pdmVyc2UtYW5kLWV2ZXJ5dGhpbmc=
+    volumes:
+      - ./django:/app
+    working_dir: /app
+    command: gunicorn core.wsgi:application --bind 0.0.0.0:8000 --capture-output --log-level debug
+
   # ── React frontend ─────────────────────────────────────────────────────────
   frontend:
     image: node:20-alpine
@@ -68,12 +94,13 @@ services:
     depends_on:
       - backend
       - php
+      - django
     ports:
       - "3000:5173"
     environment:
-      # Browser calls go through the host, so localhost is correct here
       - VITE_API_BASE_URL=http://localhost:8080
       - VITE_PHP_API_URL=http://localhost:8081
+      - VITE_DJANGO_API_URL=http://localhost:8082
       - CHOKIDAR_USEPOLLING=true
     volumes:
       - ./frontend:/app
