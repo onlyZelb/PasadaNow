@@ -28,6 +28,7 @@ public class Ride {
         createdAt = LocalDateTime.now();
     }
 
+    
     // ── Getters & Setters ─────────────────────────────────────────────────
 
     public Long getId() {

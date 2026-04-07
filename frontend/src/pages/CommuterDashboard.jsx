@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import SockJS from "sockjs-client";
 import { Client } from "@stomp/stompjs";
 import api from "../config/axios";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 
 const user = JSON.parse(localStorage.getItem("user") || "{}");
 
