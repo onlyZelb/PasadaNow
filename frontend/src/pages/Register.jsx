@@ -331,6 +331,7 @@ function CommuterForm({ onBack }) {
         localStorage.setItem(
           "user",
           JSON.stringify({
+            id: data.id,
             username: data.username,
             role: "commuter",
             fullName: fullName.trim(),
@@ -554,6 +555,7 @@ function DriverForm({ onBack }) {
         localStorage.setItem(
           "user",
           JSON.stringify({
+            id: data.id,
             username: data.username,
             role: "driver",
             fullName: fullName.trim(),

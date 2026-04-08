@@ -170,7 +170,18 @@ export default function Login() {
       const data = await res.json();
       if (res.ok) {
         setServerSuccess("Login successful! Redirecting...");
-        localStorage.setItem("user", JSON.stringify(data)); // ← save user + role
+        localStorage.setItem(
+          "user",
+          JSON.stringify({
+            id: data.id,
+            username: data.username,
+            role: data.role,
+            fullName: data.fullName,
+            plateNo: data.plateNo,
+            licenseNo: data.licenseNo,
+            todaNo: data.todaNo,
+          }),
+        ); // ← save user + role
         window.location.href = "/dashboard";
       } else {
         setServerError(data.message || "Invalid username or password.");

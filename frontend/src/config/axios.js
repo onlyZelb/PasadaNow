@@ -1,20 +1,13 @@
-
+// axios.js — cookie-based auth (matches your HttpOnly JWT cookie setup)
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "http://localhost:8080/",
-  withCredentials: true, // ← CRITICAL: sends JSESSIONID cookie
-  headers: {
-    "Content-Type": "application/json",
-  },
+  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:8080/",
+  withCredentials: true, // ← KEEP THIS — sends the HttpOnly jwt cookie
+  headers: { "Content-Type": "application/json" },
 });
 
-
-api.interceptors.request.use(
-  (config) => config,
-  (error) => Promise.reject(error),
-);
-
+// No Authorization header needed — the cookie is sent automatically
 
 api.interceptors.response.use(
   (response) => response,

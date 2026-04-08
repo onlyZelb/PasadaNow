@@ -19,8 +19,9 @@ import java.util.Map;
 @Service
 public class RideService {
 
+    // Fallback fares if Django is unreachable
     private static final Map<String, Integer> FARE_MAP = Map.of(
-            "Trike", 35,
+            "Trike", 40,
             "Tricab", 55);
 
     @Autowired
@@ -30,21 +31,22 @@ public class RideService {
     private SimpMessagingTemplate messagingTemplate;
 
     private double getFareFromDjango(double pickupLat, double pickupLng,
-            double dropoffLat, double dropoffLng) {
+            double dropoffLat, double dropoffLng, String fareType) {
         try {
             RestTemplate restTemplate = new RestTemplate();
             String djangoUrl = "http://django:8000/api/rides/fare/";
 
-            Map<String, Double> body = new HashMap<>();
+            Map<String, Object> body = new HashMap<>();
             body.put("pickup_lat", pickupLat);
             body.put("pickup_lng", pickupLng);
             body.put("dropoff_lat", dropoffLat);
             body.put("dropoff_lng", dropoffLng);
+            body.put("fare_type", fareType);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            HttpEntity<Map<String, Double>> entity = new HttpEntity<>(body, headers);
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
 
             ResponseEntity<Map> response = restTemplate.postForEntity(djangoUrl, entity, Map.class);
             return ((Number) response.getBody().get("fare_php")).doubleValue();
@@ -65,13 +67,14 @@ public class RideService {
         if (request.getPickupLat() != 0 && request.getDropoffLat() != 0) {
             djangoFare = getFareFromDjango(
                     request.getPickupLat(), request.getPickupLng(),
-                    request.getDropoffLat(), request.getDropoffLng());
+                    request.getDropoffLat(), request.getDropoffLng(),
+                    request.getFareType());
         }
 
         if (djangoFare > 0) {
             ride.setFare((int) Math.round(djangoFare));
         } else {
-            ride.setFare(FARE_MAP.getOrDefault(request.getFareType(), 35));
+            ride.setFare(FARE_MAP.getOrDefault(request.getFareType(), 40));
         }
 
         ride.setStatus(RideStatus.PENDING);

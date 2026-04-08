@@ -87,6 +87,7 @@ public class AuthController {
             String role = "ROLE_DRIVER".equals(user.getRole()) ? "driver" : "commuter";
 
             return ResponseEntity.ok(Map.of(
+                    "id", user.getId(),
                     "username", username,
                     "role", role,
                     "fullName", user.getFullName() != null ? user.getFullName() : "",
@@ -133,6 +134,7 @@ public class AuthController {
         String mappedRole = "ROLE_DRIVER".equals(role) ? "driver" : "commuter";
 
         return ResponseEntity.ok(Map.of(
+                "id", user.getId(),
                 "username", req.getUsername(),
                 "role", mappedRole,
                 "fullName", req.getFullName() != null ? req.getFullName() : "",
