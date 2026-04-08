@@ -2,8 +2,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { MapContainer, TileLayer, Marker, Circle, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import api from "../config/axios";
+import useWebSocket from "../hooks/useWebSocket";
 
-/* ── fix default leaflet icons ── */
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl:
@@ -44,40 +45,6 @@ function LocationMarker({ position, accuracy }) {
   );
 }
 
-/* ─────────────────────────────────────────────
-   MOCK API helpers  (replace with real calls)
-───────────────────────────────────────────────*/
-const API = {
-  getProfile: async () => ({
-    username: "Driver Name",
-    plate_number: "ABC-123",
-    license_no: "N04-12-345678",
-    organization: "Center TODA",
-    contact_no: "09171234567",
-    address: "Baguio City",
-    profile_pic: null,
-    is_available: false,
-  }),
-  getStats: async () => ({
-    all_time: { cnt: 0, total: 0 },
-    today: { cnt: 0, total: 0 },
-  }),
-  getHistory: async () => [],
-  toggleOnline: async (join) => {
-    await new Promise((r) => setTimeout(r, 600));
-    return { success: true, is_available: join ? 1 : 0 };
-  },
-  checkRequest: async () => null, // returns ride object or null
-  updateStatus: async (status, tripId) => {
-    await new Promise((r) => setTimeout(r, 400));
-    return { success: true };
-  },
-  getNotifCount: async () => ({ count: 0 }),
-  getNotifList: async () => ({ notifs: [] }),
-  updateProfile: async (data) => ({ success: true, ...data }),
-};
-
-/* ── live clock ── */
 function useClock() {
   const [clock, setClock] = useState("");
   useEffect(() => {
@@ -169,81 +136,27 @@ function StatCard({ color, icon, value, label }) {
   );
 }
 
-function Field({ label, value, onChange, placeholder, type = "text" }) {
-  return (
-    <div>
-      {label && (
-        <label className="block text-[0.65rem] font-semibold uppercase tracking-widest text-[#6a9cbf] mb-1.5">
-          {label}
-        </label>
-      )}
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2.5 bg-[#132540] border border-[rgba(99,160,220,0.15)] rounded-lg text-[#cce0f5] text-sm outline-none focus:border-blue-400 transition-all placeholder-[#6a9cbf]"
-      />
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════
-   MAIN COMPONENT
-═══════════════════════════════════════════*/
 export default function DriverDashboard() {
   const clock = useClock();
   const [page, setPage] = useState("dashboard");
 
-  /* state */
-  const [profile, setProfile] = useState({
-    username: "Driver",
-    plate_number: "",
-    license_no: "",
-    organization: "",
-    contact_no: "",
-    address: "",
-    profile_pic: null,
-    is_available: false,
-  });
-  const [stats, setStats] = useState({
-    all_time: { cnt: 0, total: 0 },
-    today: { cnt: 0, total: 0 },
-  });
-  const [history, setHistory] = useState([]);
-  const [isOnline, setIsOnline] = useState(false);
-  const [isToggling, setIsToggling] = useState(false);
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const driverId = user.id;
 
-  /* ride request */
+  const [isOnline, setIsOnline] = useState(false);
   const [pendingRide, setPendingRide] = useState(null);
   const [rideTimer, setRideTimer] = useState(30);
-  const timerRef = useRef(null);
-  const pollRef = useRef(null);
-
-  /* active trip */
-  const [activeTrip, setActiveTrip] = useState(null); // null | { id, status, ... }
-  const [tripDoneVisible, setTripDoneVisible] = useState(false);
-
-  /* notifications */
-  const [notifCount, setNotifCount] = useState(0);
-  const [notifOpen, setNotifOpen] = useState(false);
-  const [notifList, setNotifList] = useState([]);
-
-  /* GPS */
+  const [activeTrip, setActiveTrip] = useState(null);
+  const [history, setHistory] = useState([]);
   const [gpsPos, setGpsPos] = useState(null);
   const [gpsAcc, setGpsAcc] = useState(null);
-
-  /* profile form */
-  const [profileForm, setProfileForm] = useState({});
-  const [profileMsg, setProfileMsg] = useState(null);
-  const [isSaving, setIsSaving] = useState(false);
-
-  /* history search */
   const [histSearch, setHistSearch] = useState("");
+  const [tripDoneVisible, setTripDoneVisible] = useState(false);
 
-  /* toast */
+  const timerRef = useRef(null);
   const [toast, setToast] = useState({ msg: "", type: "blue", show: false });
   const toastTimer = useRef(null);
+
   const showToast = useCallback((msg, type = "blue") => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ msg, type, show: true });
@@ -253,24 +166,19 @@ export default function DriverDashboard() {
     );
   }, []);
 
-  /* ── init ── */
-  useEffect(() => {
-    API.getProfile().then((p) => {
-      setProfile(p);
-      setIsOnline(!!p.is_available);
-      setProfileForm({
-        username: p.username,
-        contact_no: p.contact_no,
-        address: p.address,
-        plate_number: p.plate_number,
-        license_no: p.license_no,
-        organization: p.organization,
-        new_password: "",
-      });
-    });
-    API.getStats().then(setStats);
-    API.getHistory().then(setHistory);
+  // WebSocket — listen for new ride requests
+  useWebSocket({
+    driverId,
+    onRideRequest: (ride) => {
+      if (!isOnline || activeTrip) return;
+      if (ride.status === "PENDING") {
+        showRideCard(ride);
+      }
+    },
+  });
 
+  // GPS
+  useEffect(() => {
     if ("geolocation" in navigator) {
       const id = navigator.geolocation.watchPosition(
         ({ coords }) => {
@@ -286,50 +194,16 @@ export default function DriverDashboard() {
     }
   }, []);
 
-  /* notif poll */
+  // Load history
   useEffect(() => {
-    const id = setInterval(async () => {
-      const { count } = await API.getNotifCount();
-      setNotifCount(count);
-    }, 5000);
-    return () => clearInterval(id);
-  }, []);
+    api
+      .get(`/api/rides/driver/${driverId}`)
+      .then((res) => setHistory(res.data))
+      .catch(() => {});
+  }, [activeTrip]);
 
-  /* ride request poll (when online, no active trip) */
-  useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    if (isOnline && !activeTrip) {
-      pollRef.current = setInterval(async () => {
-        if (pendingRide) return;
-        const ride = await API.checkRequest();
-        if (ride && ride.id) showRideCard(ride);
-      }, 3000);
-    }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [isOnline, activeTrip, pendingRide]);
-
-  /* toggle online */
-  async function toggleQueue() {
-    setIsToggling(true);
-    const res = await API.toggleOnline(!isOnline);
-    setIsToggling(false);
-    if (res.success) {
-      const online = res.is_available === 1;
-      setIsOnline(online);
-      showToast(
-        online
-          ? "✓ You are now Online — Accepting rides"
-          : "You are now Offline",
-        online ? "green" : "red",
-      );
-    }
-  }
-
-  /* ride card */
   function showRideCard(ride) {
-    if (pendingRide && pendingRide.id === ride.id) return;
+    if (pendingRide?.id === ride.id) return;
     setPendingRide(ride);
     setRideTimer(30);
     if (timerRef.current) clearInterval(timerRef.current);
@@ -337,7 +211,7 @@ export default function DriverDashboard() {
       setRideTimer((t) => {
         if (t <= 1) {
           clearInterval(timerRef.current);
-          respondToRide("declined", ride);
+          declineRide(ride);
           return 0;
         }
         return t - 1;
@@ -352,55 +226,48 @@ export default function DriverDashboard() {
     setRideTimer(30);
   }
 
-  async function respondToRide(action, rideOverride) {
-    const ride = rideOverride || pendingRide;
-    if (!ride) return;
+  async function acceptRide() {
+    if (!pendingRide) return;
+    const ride = pendingRide;
     hideRideCard();
-    const res = await API.updateStatus(action, ride.id);
-    if (res.success && action === "accepted") {
+    try {
+      const res = await api.patch(
+        `/api/rides/${ride.id}/accept?driverId=${driverId}`,
+      );
+      setActiveTrip(res.data);
       setIsOnline(false);
-      setActiveTrip({ ...ride, status: "accepted" });
       showToast("✓ Ride accepted! Go pick up the commuter.", "green");
-    } else if (action === "declined") {
-      showToast("Ride declined.", "red");
+    } catch {
+      showToast("Failed to accept ride.", "red");
     }
   }
 
-  async function startTrip() {
-    if (!activeTrip) return;
-    if (!confirm("Start the trip now?")) return;
-    const res = await API.updateStatus("ongoing", activeTrip.id);
-    if (res.success) {
-      setActiveTrip((t) => ({ ...t, status: "ongoing" }));
-      showToast("🚗 Trip started! En route to destination.", "yellow");
-    }
+  function declineRide(rideOverride) {
+    hideRideCard();
+    showToast("Ride declined.", "red");
   }
 
-  async function completeTrip() {
+  async function completeRide() {
     if (!activeTrip) return;
     if (!confirm("Mark this trip as completed?")) return;
-    const res = await API.updateStatus("completed", activeTrip.id);
-    if (res.success) {
+    try {
+      await api.patch(`/api/rides/${activeTrip.id}/complete`);
       setActiveTrip(null);
       setIsOnline(true);
       setTripDoneVisible(true);
-      showToast("✓ Trip completed! Back online now.", "purple");
-      setTimeout(() => setTripDoneVisible(false), 8000);
+      showToast("✓ Trip completed! Back online.", "purple");
+      setTimeout(() => setTripDoneVisible(false), 6000);
+    } catch {
+      showToast("Failed to complete ride.", "red");
     }
   }
 
-  async function saveProfile(e) {
-    e.preventDefault();
-    setIsSaving(true);
-    const res = await API.updateProfile(profileForm);
-    setIsSaving(false);
-    if (res.success) {
-      setProfile((p) => ({ ...p, ...profileForm }));
-      setProfileMsg({ type: "success", text: "Profile updated successfully!" });
-      showToast("✓ Profile saved!", "green");
-      setTimeout(() => setProfileMsg(null), 4000);
-    }
-  }
+  const completedRides = history.filter((r) => r.status === "COMPLETED");
+  const totalEarned = completedRides.reduce((s, r) => s + (r.fare || 0), 0);
+  const todayRides = completedRides.filter(
+    (r) => new Date(r.createdAt).toDateString() === new Date().toDateString(),
+  );
+  const todayEarned = todayRides.reduce((s, r) => s + (r.fare || 0), 0);
 
   const filteredHistory = history.filter(
     (r) =>
@@ -408,10 +275,9 @@ export default function DriverDashboard() {
       JSON.stringify(r).toLowerCase().includes(histSearch.toLowerCase()),
   );
 
-  /* ─── RENDER ─── */
   return (
     <div className="flex h-screen bg-[#0a1628] text-[#cce0f5] font-['Outfit',sans-serif] overflow-hidden">
-      {/* ══ SIDEBAR ══ */}
+      {/* SIDEBAR */}
       <aside className="w-[230px] bg-[#0f1f35] border-r border-[rgba(99,160,220,0.15)] flex flex-col flex-shrink-0">
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-[rgba(99,160,220,0.15)]">
           <div className="w-9 h-9 rounded-lg bg-orange-500/20 flex items-center justify-center text-sm font-black text-orange-400">
@@ -422,14 +288,12 @@ export default function DriverDashboard() {
             <span className="text-orange-400">Now</span>
           </div>
         </div>
-
         <div className="px-5 pt-5 pb-1.5 text-[0.6rem] font-bold text-[#6a9cbf] uppercase tracking-widest">
           Driver
         </div>
         {[
           { id: "dashboard", label: "Dashboard", icon: "⊞" },
           { id: "earnings", label: "Earnings & History", icon: "₱" },
-          { id: "fare_matrix", label: "Fare Matrix", icon: "📋" },
           { id: "profile", label: "My Profile", icon: "👤" },
         ].map((item) => (
           <button
@@ -444,149 +308,74 @@ export default function DriverDashboard() {
             )}
           </button>
         ))}
-
         <div className="mt-auto p-4 border-t border-[rgba(99,160,220,0.15)]">
           <div className="flex items-center gap-2.5 p-2 rounded-lg bg-[#132540] mb-2">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-500 to-orange-800 flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
-              {profile.username?.substring(0, 2).toUpperCase()}
+              {user.username?.substring(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-[0.8rem] font-semibold truncate">
-                {profile.username}
+                {user.username}
               </div>
-              <div className="text-[0.65rem] text-[#6a9cbf]">
-                {profile.plate_number || "Driver"}
-              </div>
+              <div className="text-[0.65rem] text-[#6a9cbf]">Driver</div>
             </div>
           </div>
-          {/* online indicator */}
           <div
             className={`flex items-center gap-2 px-2.5 py-1.5 rounded-full text-[0.68rem] font-semibold mb-2 transition-all ${isOnline ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-white/5 text-[#6a9cbf] border border-[rgba(99,160,220,0.15)]"}`}
           >
             <span
               className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isOnline ? "bg-green-400 shadow-[0_0_6px_#22c55e] animate-pulse" : "bg-[#6a9cbf]"}`}
             />
-            {isOnline ? "Online — Accepting Rides" : "Offline"}
+            {isOnline ? "Online" : "Offline"}
           </div>
-          <a
-            href="/logout"
+          <button
+            onClick={() => {
+              localStorage.clear();
+              window.location.href = "/login";
+            }}
             className="flex items-center gap-2 text-red-400 text-[0.8rem] font-medium px-2 py-1.5 rounded-md hover:bg-red-500/10 transition-colors w-full"
           >
             <span>⬡</span> Sign Out
-          </a>
+          </button>
         </div>
       </aside>
 
-      {/* ══ MAIN ══ */}
+      {/* MAIN */}
       <main className="flex-1 flex flex-col overflow-hidden">
         <header className="flex items-center justify-between gap-4 px-7 py-3.5 bg-[#0f1f35] border-b border-[rgba(99,160,220,0.15)] flex-shrink-0">
-          <h2 className="text-lg font-bold whitespace-nowrap">
+          <h2 className="text-lg font-bold">
             {
               {
                 dashboard: "PasadaNow Driver Portal",
                 earnings: "Earnings & History",
-                fare_matrix: "Fare Matrix",
                 profile: "Profile Settings",
               }[page]
             }
           </h2>
-          <div className="flex-1 max-w-xs flex items-center bg-[#132540] border border-[rgba(99,160,220,0.15)] rounded-lg px-3.5 py-1.5 gap-2 text-sm text-[#6a9cbf]">
-            <span>🔍</span>
-            <input
-              className="bg-transparent outline-none text-[#cce0f5] placeholder-[#6a9cbf] w-full text-[0.8rem]"
-              placeholder="Search trips, commuters..."
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-[0.78rem] text-[#6a9cbf] whitespace-nowrap">
-              {clock}
-            </span>
-            {/* notification bell */}
-            <div className="relative">
-              <button
-                onClick={() => {
-                  setNotifOpen((o) => !o);
-                  if (!notifOpen)
-                    API.getNotifList().then(({ notifs }) =>
-                      setNotifList(notifs),
-                    );
-                }}
-                className="w-8 h-8 bg-[#132540] border border-[rgba(99,160,220,0.15)] rounded-lg flex items-center justify-center text-[#6a9cbf] hover:border-[rgba(99,160,220,0.35)] transition-colors"
-              >
-                🔔
-              </button>
-              {notifCount > 0 && (
-                <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-[0.5rem] font-bold min-w-[14px] h-3.5 px-0.5 rounded-full flex items-center justify-center">
-                  {notifCount}
-                </span>
-              )}
-              {notifOpen && (
-                <div className="absolute top-full right-0 mt-2 w-80 bg-[#0f1f35] border border-[rgba(99,160,220,0.35)] rounded-xl shadow-2xl z-50 animate-[fadeUp_0.18s_ease]">
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-[rgba(99,160,220,0.15)]">
-                    <span className="text-sm font-bold">
-                      Pending Ride Requests
-                    </span>
-                    <button
-                      onClick={() => setNotifOpen(false)}
-                      className="text-[0.68rem] text-blue-400"
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <div className="max-h-72 overflow-y-auto">
-                    {notifList.length === 0 ? (
-                      <div className="text-center text-[#6a9cbf] text-sm py-7">
-                        No pending requests
-                      </div>
-                    ) : (
-                      notifList.map((n) => (
-                        <div
-                          key={n.id}
-                          className="flex items-start gap-2.5 px-4 py-3 border-b border-[rgba(99,160,220,0.08)] hover:bg-blue-500/5 cursor-pointer"
-                        >
-                          <span className="w-2 h-2 mt-1 rounded-full bg-orange-500 flex-shrink-0 shadow-[0_0_6px_#f08228]" />
-                          <div>
-                            <div className="text-[0.78rem] font-semibold">
-                              Ride from {n.commuter_name}
-                            </div>
-                            <div className="text-[0.68rem] text-[#6a9cbf] truncate">
-                              {n.origin} → {n.destination}
-                            </div>
-                            <div className="text-[0.72rem] font-bold text-green-400">
-                              ₱{parseFloat(n.fare).toFixed(2)}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          <span className="text-[0.78rem] text-[#6a9cbf]">{clock}</span>
         </header>
 
         <div className="flex-1 overflow-y-auto p-6">
-          {/* ════════ DASHBOARD ════════ */}
+          {/* DASHBOARD */}
           {page === "dashboard" && (
             <div className="animate-[fadeUp_0.25s_ease]">
               <div className="grid grid-cols-4 gap-3.5 mb-5">
                 <StatCard
                   color="green"
                   icon="₱"
-                  value={`₱${parseFloat(stats.all_time.total).toFixed(2)}`}
+                  value={`₱${totalEarned.toFixed(2)}`}
                   label="Total Earned"
                 />
                 <StatCard
                   color="blue"
                   icon="🚗"
-                  value={stats.all_time.cnt}
+                  value={completedRides.length}
                   label="Total Trips"
                 />
                 <StatCard
                   color="orange"
                   icon="📊"
-                  value={`₱${parseFloat(stats.today.total).toFixed(2)}`}
+                  value={`₱${todayEarned.toFixed(2)}`}
                   label="Today's Earnings"
                 />
                 <StatCard
@@ -603,18 +392,18 @@ export default function DriverDashboard() {
                 />
               </div>
 
-              {/* status bar */}
+              {/* Online toggle */}
               <div
                 className={`flex items-center justify-between px-5 py-3.5 rounded-xl border mb-4 transition-all ${isOnline ? "bg-green-500/[0.04] border-green-500/30" : "bg-[#0f1f35] border-[rgba(99,160,220,0.15)]"}`}
               >
                 <div className="flex items-center gap-3">
                   <span
-                    className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${isOnline ? "bg-green-400 shadow-[0_0_10px_#22c55e] animate-pulse" : "bg-[#6a9cbf]"}`}
+                    className={`w-2.5 h-2.5 rounded-full ${isOnline ? "bg-green-400 shadow-[0_0_10px_#22c55e] animate-pulse" : "bg-[#6a9cbf]"}`}
                   />
                   <div>
                     <div className="text-[0.9rem] font-semibold">
                       {isOnline
-                        ? "System Online — Accepting Requests"
+                        ? "Online — Accepting Requests"
                         : "System Offline"}
                     </div>
                     <div className="text-[0.72rem] text-[#6a9cbf]">
@@ -625,79 +414,46 @@ export default function DriverDashboard() {
                   </div>
                 </div>
                 <button
-                  onClick={toggleQueue}
-                  disabled={isToggling || !!activeTrip}
-                  className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 ${isOnline ? "bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20" : "bg-green-500 text-white shadow-[0_4px_16px_rgba(34,197,94,0.35)] hover:opacity-90"}`}
+                  onClick={() => {
+                    setIsOnline((o) => !o);
+                    showToast(
+                      !isOnline
+                        ? "✓ You are now Online"
+                        : "You are now Offline",
+                      !isOnline ? "green" : "red",
+                    );
+                  }}
+                  disabled={!!activeTrip}
+                  className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 ${isOnline ? "bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20" : "bg-green-500 text-white shadow-[0_4px_16px_rgba(34,197,94,0.35)] hover:opacity-90"}`}
                 >
-                  {isToggling && (
-                    <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                  )}
                   {isOnline ? "Go Offline" : "Go Online"}
                 </button>
               </div>
 
-              {/* active trip banner */}
+              {/* Active trip */}
               {activeTrip && (
-                <div
-                  className={`flex items-center justify-between gap-3 px-4 py-3.5 rounded-xl border mb-4 animate-[fadeUp_0.3s_ease] ${activeTrip.status === "ongoing" ? "bg-yellow-500/10 border-yellow-500/30" : "bg-green-500/10 border-green-500/30"}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`w-2.5 h-2.5 rounded-full flex-shrink-0 animate-pulse ${activeTrip.status === "ongoing" ? "bg-yellow-400 shadow-[0_0_8px_#eab308]" : "bg-green-400 shadow-[0_0_8px_#22c55e]"}`}
-                    />
-                    <div>
-                      <div
-                        className={`text-[0.85rem] font-bold ${activeTrip.status === "ongoing" ? "text-yellow-400" : "text-green-400"}`}
-                      >
-                        {activeTrip.status === "ongoing"
-                          ? "Trip Ongoing — En Route"
-                          : "Active Trip — Picking Up Commuter"}
-                      </div>
-                      <div className="text-[0.72rem] text-[#6a9cbf] mt-0.5">
-                        <b>{activeTrip.commuter_name}</b> · {activeTrip.origin}{" "}
-                        → {activeTrip.destination} ·{" "}
-                        <b className="text-green-400">
-                          ₱{parseFloat(activeTrip.fare).toFixed(2)}
-                        </b>
-                      </div>
-                      {activeTrip.status === "ongoing" && (
-                        <div
-                          className="mt-1.5 h-1 w-40 rounded overflow-hidden"
-                          style={{
-                            background:
-                              "repeating-linear-gradient(90deg,#eab308 0,#eab308 18px,transparent 18px,transparent 36px)",
-                            backgroundSize: "54px 100%",
-                            animation: "roadAnim 0.7s linear infinite",
-                          }}
-                        />
-                      )}
+                <div className="flex items-center justify-between gap-3 px-4 py-3.5 rounded-xl border mb-4 bg-green-500/10 border-green-500/30">
+                  <div>
+                    <div className="text-[0.85rem] font-bold text-green-400">
+                      Active Trip — Picking Up Commuter
+                    </div>
+                    <div className="text-[0.72rem] text-[#6a9cbf] mt-0.5">
+                      {activeTrip.pickup} → {activeTrip.dropoff} ·{" "}
+                      <b className="text-green-400">₱{activeTrip.fare}</b>
                     </div>
                   </div>
-                  <div className="flex gap-2 flex-shrink-0">
-                    {activeTrip.status === "accepted" && (
-                      <button
-                        onClick={startTrip}
-                        className="px-4 py-2 bg-yellow-400 text-black text-sm font-bold rounded-lg hover:opacity-90 transition-opacity"
-                      >
-                        🚗 Start Trip
-                      </button>
-                    )}
-                    {activeTrip.status === "ongoing" && (
-                      <button
-                        onClick={completeTrip}
-                        className="px-4 py-2 bg-green-500 text-white text-sm font-bold rounded-lg hover:opacity-90 transition-opacity"
-                      >
-                        Mark as Completed ✓
-                      </button>
-                    )}
-                  </div>
+                  <button
+                    onClick={completeRide}
+                    className="px-4 py-2 bg-green-500 text-white text-sm font-bold rounded-lg hover:opacity-90"
+                  >
+                    Mark as Completed ✓
+                  </button>
                 </div>
               )}
 
-              {/* trip done banner */}
               {tripDoneVisible && (
-                <div className="flex items-center gap-3 px-4 py-3.5 bg-purple-500/10 border border-purple-500/30 rounded-xl mb-4 animate-[fadeUp_0.3s_ease]">
-                  <div className="w-10 h-10 rounded-full bg-purple-500/20 border-2 border-purple-400/40 flex items-center justify-center text-purple-400 text-lg animate-[bounceIn_0.5s_ease]">
+                <div className="flex items-center gap-3 px-4 py-3.5 bg-purple-500/10 border border-purple-500/30 rounded-xl mb-4">
+                  <div className="w-10 h-10 rounded-full bg-purple-500/20 border-2 border-purple-400/40 flex items-center justify-center text-purple-400 text-lg">
                     ✓
                   </div>
                   <div>
@@ -711,7 +467,7 @@ export default function DriverDashboard() {
                 </div>
               )}
 
-              {/* map */}
+              {/* Map */}
               <div
                 className="rounded-xl overflow-hidden border border-[rgba(99,160,220,0.15)] mb-4 relative"
                 style={{ height: 360 }}
@@ -729,11 +485,11 @@ export default function DriverDashboard() {
                   <LocationMarker position={gpsPos} accuracy={gpsAcc} />
                 </MapContainer>
 
-                {/* ride request overlay */}
+                {/* Ride request overlay */}
                 {pendingRide && (
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-[#132540] border-2 border-orange-500 rounded-xl p-5 z-[1000] shadow-2xl animate-[slideUp_0.35s_ease]">
                     <div className="flex items-center gap-2.5 mb-3.5">
-                      <div className="w-8 h-8 bg-orange-500/20 rounded-full flex items-center justify-center text-orange-400 flex-shrink-0">
+                      <div className="w-8 h-8 bg-orange-500/20 rounded-full flex items-center justify-center text-orange-400">
                         🔔
                       </div>
                       <div>
@@ -741,14 +497,14 @@ export default function DriverDashboard() {
                           New Ride Request!
                         </div>
                         <div className="text-[0.68rem] text-[#6a9cbf]">
-                          From: {pendingRide.commuter_name}
+                          Rider #{pendingRide.riderId}
                         </div>
                       </div>
                     </div>
                     <div className="grid grid-cols-3 gap-2 mb-3">
                       {[
-                        ["From", pendingRide.origin],
-                        ["To", pendingRide.destination],
+                        ["From", pendingRide.pickup],
+                        ["To", pendingRide.dropoff],
                       ].map(([l, v]) => (
                         <div key={l} className="bg-[#0f1f35] rounded-lg p-2.5">
                           <div className="text-[0.58rem] text-[#6a9cbf] uppercase tracking-widest font-bold mb-1">
@@ -764,26 +520,26 @@ export default function DriverDashboard() {
                           Fare
                         </div>
                         <div className="text-xl font-extrabold text-green-400">
-                          ₱{parseFloat(pendingRide.fare).toFixed(2)}
+                          ₱{pendingRide.fare}
                         </div>
                       </div>
                     </div>
-                    <div className="text-[0.72rem] text-[#6a9cbf] mb-3 flex items-center gap-1">
+                    <div className="text-[0.72rem] text-[#6a9cbf] mb-3">
                       Auto-decline in{" "}
-                      <span className="text-[1rem] font-bold text-orange-400 mx-1 min-w-[20px]">
+                      <span className="text-[1rem] font-bold text-orange-400 mx-1">
                         {rideTimer}
                       </span>
                       s
                     </div>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => respondToRide("accepted")}
-                        className="flex-1 py-2.5 bg-green-500 text-white font-bold rounded-lg text-sm hover:opacity-90 transition-opacity"
+                        onClick={acceptRide}
+                        className="flex-1 py-2.5 bg-green-500 text-white font-bold rounded-lg text-sm hover:opacity-90"
                       >
                         ✓ Accept Ride
                       </button>
                       <button
-                        onClick={() => respondToRide("declined")}
+                        onClick={() => declineRide()}
                         className="px-4 py-2.5 bg-red-500/10 text-red-400 border border-red-500/25 font-bold rounded-lg text-sm"
                       >
                         ✕ Decline
@@ -792,99 +548,30 @@ export default function DriverDashboard() {
                   </div>
                 )}
               </div>
-
-              {/* vehicle + today summary */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-[#0f1f35] border border-[rgba(99,160,220,0.15)] rounded-xl p-5">
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shadow-[0_0_6px_#f08228]" />
-                    <span className="text-sm font-semibold">Vehicle Info</span>
-                  </div>
-                  <table className="w-full text-sm">
-                    {[
-                      ["Plate Number", profile.plate_number || "—"],
-                      ["License No.", profile.license_no || "—"],
-                      ["Organization", profile.organization || "—"],
-                      ["Contact", profile.contact_no || "—"],
-                    ].map(([l, v]) => (
-                      <tr key={l}>
-                        <td className="py-2 text-[#6a9cbf] w-32">{l}</td>
-                        <td className="py-2 font-semibold">{v}</td>
-                      </tr>
-                    ))}
-                  </table>
-                </div>
-                <div className="bg-[#0f1f35] border border-[rgba(99,160,220,0.15)] rounded-xl p-5">
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-400 shadow-[0_0_6px_#22c55e]" />
-                    <span className="text-sm font-semibold">
-                      Today's Summary
-                    </span>
-                  </div>
-                  <table className="w-full text-sm">
-                    {[
-                      ["Trips Today", stats.today.cnt],
-                      [
-                        "Earned Today",
-                        `₱${parseFloat(stats.today.total).toFixed(2)}`,
-                      ],
-                      [
-                        "Avg. Fare",
-                        stats.all_time.cnt > 0
-                          ? `₱${(stats.all_time.total / stats.all_time.cnt).toFixed(2)}`
-                          : "₱0.00",
-                      ],
-                      [
-                        "All-time",
-                        `₱${parseFloat(stats.all_time.total).toFixed(2)}`,
-                      ],
-                    ].map(([l, v]) => (
-                      <tr key={l}>
-                        <td className="py-2 text-[#6a9cbf] w-32">{l}</td>
-                        <td
-                          className={`py-2 font-bold ${l.includes("Earned") || l.includes("time") ? "text-green-400" : ""}`}
-                        >
-                          {v}
-                        </td>
-                      </tr>
-                    ))}
-                  </table>
-                </div>
-              </div>
             </div>
           )}
 
-          {/* ════════ EARNINGS ════════ */}
+          {/* EARNINGS */}
           {page === "earnings" && (
             <div className="animate-[fadeUp_0.25s_ease]">
-              <div className="grid grid-cols-4 gap-3.5 mb-5">
+              <div className="grid grid-cols-3 gap-3.5 mb-5">
                 <StatCard
                   color="green"
                   icon="₱"
-                  value={`₱${parseFloat(stats.all_time.total).toFixed(2)}`}
+                  value={`₱${totalEarned.toFixed(2)}`}
                   label="Total Earned"
                 />
                 <StatCard
                   color="blue"
                   icon="🚗"
-                  value={stats.all_time.cnt}
+                  value={completedRides.length}
                   label="Completed Trips"
                 />
                 <StatCard
                   color="orange"
                   icon="📊"
-                  value={`₱${parseFloat(stats.today.total).toFixed(2)}`}
+                  value={`₱${todayEarned.toFixed(2)}`}
                   label="Today's Earnings"
-                />
-                <StatCard
-                  color="purple"
-                  icon="📈"
-                  value={
-                    stats.all_time.cnt > 0
-                      ? `₱${(stats.all_time.total / stats.all_time.cnt).toFixed(2)}`
-                      : "₱0.00"
-                  }
-                  label="Avg. Fare / Trip"
                 />
               </div>
               <div className="bg-[#0f1f35] border border-[rgba(99,160,220,0.15)] rounded-xl p-5">
@@ -898,29 +585,21 @@ export default function DriverDashboard() {
                       placeholder="Filter trips..."
                     />
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_6px_#3b8ee8]" />
-                    <span className="text-sm font-semibold">Trip History</span>
-                  </div>
+                  <span className="text-sm font-semibold">Trip History</span>
                 </div>
                 <table className="w-full text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-[rgba(99,160,220,0.15)]">
-                      {[
-                        "Date",
-                        "Commuter",
-                        "Origin",
-                        "Destination",
-                        "Fare",
-                        "Status",
-                      ].map((h) => (
-                        <th
-                          key={h}
-                          className="px-3 py-2.5 text-left text-[0.65rem] font-bold uppercase tracking-widest text-[#6a9cbf]"
-                        >
-                          {h}
-                        </th>
-                      ))}
+                      {["#", "Pickup", "Dropoff", "Fare", "Status", "Date"].map(
+                        (h) => (
+                          <th
+                            key={h}
+                            className="px-3 py-2.5 text-left text-[0.65rem] font-bold uppercase tracking-widest text-[#6a9cbf]"
+                          >
+                            {h}
+                          </th>
+                        ),
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -940,21 +619,20 @@ export default function DriverDashboard() {
                           className="border-b border-[rgba(99,160,220,0.08)] hover:bg-blue-500/[0.03]"
                         >
                           <td className="px-3 py-2.5 text-[#6a9cbf]">
-                            {new Date(r.created_at).toLocaleString("en-PH", {
+                            #{r.id}
+                          </td>
+                          <td className="px-3 py-2.5">{r.pickup}</td>
+                          <td className="px-3 py-2.5">{r.dropoff}</td>
+                          <td className="px-3 py-2.5 font-bold">₱{r.fare}</td>
+                          <td className="px-3 py-2.5">
+                            <Badge status={r.status?.toLowerCase()} />
+                          </td>
+                          <td className="px-3 py-2.5 text-[#6a9cbf]">
+                            {new Date(r.createdAt).toLocaleDateString("en-PH", {
                               month: "short",
                               day: "2-digit",
-                              hour: "numeric",
-                              minute: "2-digit",
+                              year: "numeric",
                             })}
-                          </td>
-                          <td className="px-3 py-2.5">{r.commuter}</td>
-                          <td className="px-3 py-2.5">{r.origin}</td>
-                          <td className="px-3 py-2.5">{r.destination}</td>
-                          <td className="px-3 py-2.5 font-bold">
-                            ₱{parseFloat(r.fare).toFixed(2)}
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <Badge status={r.status} />
                           </td>
                         </tr>
                       ))
@@ -965,214 +643,35 @@ export default function DriverDashboard() {
             </div>
           )}
 
-          {/* ════════ FARE MATRIX ════════ */}
-          {page === "fare_matrix" && (
-            <div className="animate-[fadeUp_0.25s_ease]">
-              <div className="grid grid-cols-3 gap-3 mb-5">
-                {[
-                  ["₱15.00", "Base Fare (First 4 km)"],
-                  ["+₱2.00", "Per Succeeding km"],
-                  ["4.0 km", "Minimum Distance"],
-                ].map(([v, l]) => (
-                  <div
-                    key={l}
-                    className="bg-[#132540] border border-[rgba(99,160,220,0.15)] rounded-xl p-4 text-center"
-                  >
-                    <div className="text-2xl font-bold text-orange-400 mb-1">
-                      {v}
-                    </div>
-                    <div className="text-[0.68rem] text-[#6a9cbf] uppercase tracking-wide">
-                      {l}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="bg-[#0f1f35] border border-[rgba(99,160,220,0.15)] rounded-xl p-5">
-                <div className="flex items-center gap-2 mb-4">
-                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shadow-[0_0_6px_#f08228]" />
-                  <span className="text-sm font-semibold">
-                    Official Fare Schedule (LTFRB)
-                  </span>
-                </div>
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="border-b border-[rgba(99,160,220,0.15)]">
-                      {[
-                        "Distance",
-                        "Base Fare",
-                        "Additional",
-                        "Total Fare",
-                      ].map((h) => (
-                        <th
-                          key={h}
-                          className="px-3 py-2.5 text-left text-[0.65rem] font-bold uppercase tracking-widest text-[#6a9cbf]"
-                        >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      ["Up to 4.0 km", "₱15.00", "—", "₱15.00"],
-                      ["5 km", "₱15.00", "+₱2.00", "₱17.00"],
-                      ["8 km", "₱15.00", "+₱8.00", "₱23.00"],
-                      ["10 km", "₱15.00", "+₱12.00", "₱27.00"],
-                      ["15 km", "₱15.00", "+₱22.00", "₱37.00"],
-                      ["20 km", "₱15.00", "+₱32.00", "₱47.00"],
-                    ].map(([d, b, a, t]) => (
-                      <tr
-                        key={d}
-                        className="border-b border-[rgba(99,160,220,0.08)] hover:bg-blue-500/[0.03]"
-                      >
-                        <td className="px-3 py-2.5">{d}</td>
-                        <td className="px-3 py-2.5 text-green-400 font-bold">
-                          {b}
-                        </td>
-                        <td className="px-3 py-2.5">{a}</td>
-                        <td
-                          className={`px-3 py-2.5 font-bold ${parseFloat(t.replace("₱", "")) >= 37 ? "text-orange-400" : ""}`}
-                        >
-                          {t}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <p className="text-[0.72rem] text-[#6a9cbf] mt-3.5">
-                  * Formula: ₱15.00 base + (distance − 4) × ₱2.00/km. Based on
-                  official LTFRB guidelines.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* ════════ PROFILE ════════ */}
+          {/* PROFILE */}
           {page === "profile" && (
             <div className="max-w-2xl animate-[fadeUp_0.25s_ease]">
-              {profileMsg && (
-                <div
-                  className={`flex items-center gap-2 px-3.5 py-2.5 rounded-lg text-sm font-semibold mb-4 ${profileMsg.type === "success" ? "bg-green-500/10 border border-green-500/20 text-green-400" : "bg-red-500/10 border border-red-500/20 text-red-400"}`}
-                >
-                  {profileMsg.text}
-                </div>
-              )}
               <div className="flex items-center gap-5 p-5 bg-[#132540] border border-[rgba(99,160,220,0.15)] rounded-xl mb-5">
                 <div className="w-[72px] h-[72px] rounded-full bg-gradient-to-br from-orange-500 to-orange-800 flex items-center justify-center text-[1.4rem] font-extrabold text-white border-2 border-orange-400/40 flex-shrink-0">
-                  {profile.username?.substring(0, 2).toUpperCase()}
+                  {user.username?.substring(0, 2).toUpperCase()}
                 </div>
                 <div>
                   <h4 className="text-sm font-semibold mb-1">
-                    {profile.username}
+                    {user.username}
                   </h4>
-                  <p className="text-[0.72rem] text-[#6a9cbf] mb-2.5">
-                    Partner Driver · {profile.plate_number || "No plate set"}
+                  <p className="text-[0.72rem] text-[#6a9cbf]">
+                    Partner Driver
                   </p>
-                  <button className="px-3.5 py-1.5 bg-[#0f1f35] border border-[rgba(99,160,220,0.15)] rounded-lg text-[0.8rem] text-[#cce0f5] hover:border-[rgba(99,160,220,0.35)] transition-colors">
-                    Change Photo
-                  </button>
                 </div>
               </div>
-
-              <form
-                onSubmit={saveProfile}
-                className="bg-[#0f1f35] border border-[rgba(99,160,220,0.15)] rounded-xl p-5 space-y-3"
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shadow-[0_0_6px_#3b8ee8]" />
-                  <span className="text-sm font-semibold">
-                    Personal Information
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field
-                    label="Complete Name"
-                    value={profileForm.username || ""}
-                    onChange={(v) =>
-                      setProfileForm((f) => ({ ...f, username: v }))
-                    }
-                  />
-                  <Field
-                    label="Contact No."
-                    value={profileForm.contact_no || ""}
-                    onChange={(v) =>
-                      setProfileForm((f) => ({ ...f, contact_no: v }))
-                    }
-                  />
-                </div>
-                <Field
-                  label="Home Address"
-                  value={profileForm.address || ""}
-                  onChange={(v) =>
-                    setProfileForm((f) => ({ ...f, address: v }))
-                  }
-                />
-
-                <div className="text-[0.68rem] font-bold uppercase tracking-widest text-[#6a9cbf] pt-2 pb-1 border-b border-[rgba(99,160,220,0.15)]">
-                  Vehicle &amp; License
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field
-                    label="Branch / TODA"
-                    value={profileForm.organization || ""}
-                    onChange={(v) =>
-                      setProfileForm((f) => ({ ...f, organization: v }))
-                    }
-                    placeholder="e.g. Center TODA"
-                  />
-                  <Field
-                    label="Plate Number"
-                    value={profileForm.plate_number || ""}
-                    onChange={(v) =>
-                      setProfileForm((f) => ({ ...f, plate_number: v }))
-                    }
-                  />
-                  <Field
-                    label="License No."
-                    value={profileForm.license_no || ""}
-                    onChange={(v) =>
-                      setProfileForm((f) => ({ ...f, license_no: v }))
-                    }
-                  />
-                  <Field
-                    label="New Password (blank to keep)"
-                    value={profileForm.new_password || ""}
-                    onChange={(v) =>
-                      setProfileForm((f) => ({ ...f, new_password: v }))
-                    }
-                    type="password"
-                    placeholder="••••••••"
-                  />
-                </div>
-                <div className="flex gap-2.5 pt-2">
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    className="px-6 py-2.5 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white font-semibold rounded-lg text-sm transition-colors"
-                  >
-                    {isSaving ? "Saving..." : "Save Changes"}
-                  </button>
-                  <a
-                    href="?page=profile"
-                    className="px-6 py-2.5 bg-[#132540] border border-[rgba(99,160,220,0.15)] hover:border-[rgba(99,160,220,0.35)] text-[#cce0f5] font-semibold rounded-lg text-sm transition-colors"
-                  >
-                    Cancel
-                  </a>
-                </div>
-              </form>
+              <div className="bg-[#0f1f35] border border-[rgba(99,160,220,0.15)] rounded-xl p-5 text-[#6a9cbf] text-sm">
+                Profile editing coming soon.
+              </div>
             </div>
           )}
         </div>
       </main>
 
       <Toast {...toast} />
-
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
-        @keyframes fadeUp    { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes slideUp   { from{transform:translateX(-50%) translateY(24px);opacity:0} to{transform:translateX(-50%) translateY(0);opacity:1} }
-        @keyframes bounceIn  { 0%{transform:scale(.7);opacity:0} 60%{transform:scale(1.08)} 100%{transform:scale(1);opacity:1} }
-        @keyframes roadAnim  { 0%{background-position:0 0} 100%{background-position:60px 0} }
+        @keyframes fadeUp  { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes slideUp { from{transform:translateX(-50%) translateY(24px);opacity:0} to{transform:translateX(-50%) translateY(0);opacity:1} }
         .leaflet-container { background: #0a1628; }
       `}</style>
     </div>
