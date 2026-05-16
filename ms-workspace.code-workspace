@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "sb"
+		},
+		{
+			"path": "php"
+		},
+		{
+			"path": "react"
+		}
+	],
+	"settings": {
+		"java.configuration.updateBuildConfiguration": "interactive"
+	}
+}

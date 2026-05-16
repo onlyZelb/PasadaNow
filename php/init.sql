@@ -1,0 +1,2 @@
+-- PasadaNow PHP service
+-- Tables are primarily managed by Flyway in Spring Boot

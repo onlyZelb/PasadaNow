@@ -1,0 +1,112 @@
+server:
+  port: 8000
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    loadbalancer:
+      enabled: false
+    gateway:
+      server:
+        webflux:
+          routes:
+            # ── Spring Boot ───────────────────────────────────────────
+            - id: auth-service
+              uri: http://backend:8080
+              predicates:
+                - Path=/api/auth/**
+
+            - id: chat-service
+              uri: http://backend:8080
+              predicates:
+                - Path=/api/chat/**
+
+            - id: websocket-service
+              uri: http://backend:8080
+              predicates:
+                - Path=/ws/**
+
+            # ── PHP (SPECIFIC routes FIRST) ───────────────────────────
+            - id: php-drivers-online
+              uri: http://php:80
+              predicates:
+                - Path=/api/drivers/online
+              filters:
+                - RewritePath=/api/drivers/online, /drivers/online
+
+            - id: php-drivers-me-status
+              uri: http://php:80
+              predicates:
+                - Path=/api/drivers/me/status
+              filters:
+                - RewritePath=/api/drivers/me/status, /drivers/me/status
+
+            - id: php-drivers-me-location
+              uri: http://php:80
+              predicates:
+                - Path=/api/drivers/me/location
+              filters:
+                - RewritePath=/api/drivers/me/location, /drivers/me/location
+
+            - id: rides-service
+              uri: http://php:80
+              predicates:
+                - Path=/api/rides/**
+              filters:
+                - RewritePath=/api/rides(?<segment>/?.*), /rides$\{segment}
+
+            # ── Django ────────────────────────────────────────────────
+            - id: fare-config-service
+              uri: http://django:8000
+              predicates:
+                - Path=/api/fare-config
+              filters:
+                - RewritePath=/api/fare-config, /api/fare-config
+
+            - id: drivers-service
+              uri: http://django:8000
+              predicates:
+                - Path=/api/drivers/**
+              filters:
+                - RewritePath=/api/drivers/?(?<segment>.*), /api/drivers/$\{segment}
+
+            - id: earnings-service
+              uri: http://django:8000
+              predicates:
+                - Path=/api/earnings/**
+              filters:
+                - RewritePath=/api/earnings/?(?<segment>.*), /api/earnings/$\{segment}
+
+            - id: commuters-service
+              uri: http://django:8000
+              predicates:
+                - Path=/api/commuters/**
+              filters:
+                - RewritePath=/api/commuters/?(?<segment>.*), /api/commuters/$\{segment}
+
+            - id: admin-service
+              uri: http://django:8000
+              predicates:
+                - Path=/api/admin/**
+              filters:
+                - RewritePath=/api/admin/?(?<segment>.*), /api/admin/$\{segment}
+
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowedOriginPatterns:
+                  - "http://localhost:[*]"
+                  - "http://192.168.*.*:[*]"
+                allowedMethods:
+                  - GET
+                  - POST
+                  - PUT
+                  - PATCH
+                  - DELETE
+                  - OPTIONS
+                allowedHeaders:
+                  - "*"
+                allowCredentials: true
+
+jwt:
+  secret: Zm9ydHktdHdvLWlzLXRoZS1hbnN3ZXItdG8tbGlmZS10aGUtdW5pdmVyc2UtYW5kLWV5dGhpbmc=

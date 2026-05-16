@@ -1,0 +1,4 @@
+ALTER TABLE drivers
+ADD COLUMN IF NOT EXISTS photo_license TEXT,
+ADD COLUMN IF NOT EXISTS photo_plate   TEXT,
+ADD COLUMN IF NOT EXISTS photo_toda    TEXT;
